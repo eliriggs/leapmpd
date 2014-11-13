@@ -1,0 +1,91 @@
+#!/usr/bin/python2
+import os, sys, inspect, thread, time
+import Leap as Leap
+from Leap import CircleGesture, KeyTapGesture, ScreenTapGesture, SwipeGesture, CircleGesture, Bone
+from gi.repository import Notify
+
+Notify.init("LeapMPD")
+
+PauseNote = Notify.Notification.new("paused", "", "dialog-information")
+PlayNote = Notify.Notification.new("resume", "", "dialog-information")
+VolumeChangeNote = Notify.Notification.new("volume changing", "", "dialog-information")
+VolumeNote = Notify.Notification.new("volume set", "", "dialog-information")
+MoveNote = Notify.Notification.new("moving", "", "dialog-information")
+StillNote = Notify.Notification.new("still", "", "dialog-information")
+
+class SampleListener(Leap.Listener):
+    def __init__(self):
+        super(SampleListener, self).__init__()
+        self.adjusting = False
+        self.playing = False
+
+    def on_connect(self, controller):
+        controller.enable_gesture(Leap.Gesture.TYPE_SWIPE)
+        controller.enable_gesture(Leap.Gesture.TYPE_KEY_TAP)
+        print("connected")
+
+    def on_frame(self, controller):
+        frame = controller.frame()
+        if self.adjusting:
+            if frame.hands.is_empty:
+                self.adjusting = False
+                VolumeNote.show()
+            else:
+                os.popen("amixer set Master %d%%" % int((abs(min(frame.hands.rightmost.palm_position.y, 350)) - 50) / 3))
+
+        if not frame.hands.is_empty:
+            boner = frame.hands.frontmost.fingers.frontmost.bone(Bone.TYPE_DISTAL)
+            if boner.next_joint.z  < -50:
+                MoveNote.show()
+                y_pos = (max(min(boner.next_joint.y, 350), 0) + 0) / 150.0
+                x_pos = (max(min(boner.next_joint.x, 100), -100) + 100) / 250.0
+                os.popen("i3-msg move position %d %d" % (int(x_pos * 1600), max(900 - int(y_pos * 900), 0)))
+
+        for gesture in frame.gestures():
+            if gesture.type is Leap.Gesture.TYPE_SWIPE:
+                swipe = Leap.SwipeGesture(gesture)
+                if abs(swipe.direction.x) > abs(swipe.direction.y):
+                    if swipe.direction.x > -20:
+                        print("right swipe")
+                    else:
+                        print("left swipe")
+                else:
+                    print("vertical swipe")
+
+            elif gesture.type is Leap.Gesture.TYPE_KEY_TAP:
+                swipe = Leap.KeyTapGesture(gesture)
+                if swipe.pointables[0].is_finger:
+                    finger = Leap.Finger(swipe.pointables[0])
+                    print("finger tap: %d" % finger.type())
+                    if finger.type() == 1:
+                        if self.playing:
+                            os.popen("mpc pause")
+                            PauseNote.show()
+                        else:
+                            os.popen("mpc toggle")
+                            PlayNote.show()
+                        self.playing = not self.playing
+                    elif finger.type() == 2:
+                        self.adjusting = not self.adjusting
+                        if self.adjusting:
+                            VolumeChangeNote.show()
+                        else:
+                            VolumeNote.show()
+
+def main():
+    listener = SampleListener()
+    controller = Leap.Controller()
+
+    controller.add_listener(listener)
+
+
+    print('press enter to quit')
+    try:
+        sys.stdin.readline()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        controller.remove_listener(listener)
+
+if __name__ == "__main__":
+    main()
